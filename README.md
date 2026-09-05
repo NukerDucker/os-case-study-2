@@ -128,9 +128,86 @@ mono Case_02.exe          # macOS/Linux
 
 | File | Description |
 |------|-------------|
-| `Program.cs` | Fixed solution (thread-safe) |
+| `Program.cs` | Napaul's solution |
+| `tony-Program.cs` | Tony's solution |
+| `yu-Program.cs` | Yu's solution |
+| `Program.Final.cs` | Combined final version (see below) |
 | `Program.Baseline.cs` | Original unsynchronized baseline (reference only) |
 | `CaseStudy02.pdf` | Assignment spec (Thai + English) |
+
+---
+
+## Variant Comparison
+
+Four team solutions scored against correctness and C# best-practice criteria.
+
+| Criterion | Baseline | Nuker | Tony | Yu | **Final** |
+|---|---|---|---|---|---|
+| Lock object | ❌ none | ✅ `readonly` | ⚠️ not `readonly` | ⚠️ not `readonly` | ✅ `readonly` |
+| `while` + `Monitor.Wait` | ❌ | ✅ | ✅ | ✅ | ✅ |
+| `PulseAll` (not `Pulse`) | ❌ | ✅ | ❌ `Pulse` → livelock risk | ✅ | ✅ |
+| Print inside lock (FIFO transcript) | ❌ | ✅ | ❌ outside | ❌ outside | ✅ |
+| Clean consumer shutdown | ❌ | ⚠️ background kill | ✅ flag + `Join` | ✅ `Join` (hardcoded counts) | ✅ flag + `Join` |
+| No hardcoded sizes / counts | ❌ | ✅ `.Length` | ❌ | ⚠️ 34/34/33 | ✅ `const BufferCapacity` |
+| Thread termination tracking | ❌ | ❌ | ❌ | ✅ | ✅ |
+
+### Key defects per variant
+
+**Baseline** — no locking → data races on `Front`/`Back`/`Count`; consumers never block → 109–111 duplicate reads per run.
+
+**Nuker** — correctest individual solution. Gap: background-thread kill to terminate consumers is less idiomatic than `Join`; consumers rely on the process exiting rather than self-terminating.
+
+**Tony** — `Monitor.Pulse` not `PulseAll`: one shared wait-set means Pulse may wake a producer when the queue is full, consuming the wakeup while the real consumer stays blocked → deadlock. `Console.WriteLine` outside the lock: printed order doesn't match FIFO dequeue order.
+
+**Yu** — consumer loop hardcodes 34/34/33 items per thread (brittle; breaks if producer ranges change). Print outside lock. Non-`readonly` lock field.
+
+---
+
+## Final Version (`Program.Final.cs`)
+
+Combines the best parts from each team solution:
+
+| What | From |
+|---|---|
+| `readonly` lock, `while`+`PulseAll`, print inside lock | Napaul |
+| `producersFinished` flag + `Join` all consumers (clean exit) | Tony |
+| Thread termination order tracking | Yu |
+
+### Key design decisions
+
+- **`while` not `if` around `Monitor.Wait`** — C#/.NET uses Mesa semantics. The lock is re-acquired in scheduler order, so by the time a woken thread runs, another thread may have already taken the slot. Must recheck.
+- **`PulseAll` not `Pulse`** — producers and consumers share one wait set. `Pulse` may wake the wrong role; that wakeup is consumed and the thread that could actually proceed stays blocked.
+- **Print inside lock** — `DeQueueAndPrint` holds the lock while writing to console, so the printed order matches the actual dequeue order. Both Tony's and Yu's versions print outside the lock, meaning two threads can dequeue A then B but print them out of order.
+- **`producersFinished` flag** — after both producers `Join`, Main sets the flag and calls `PulseAll`. Consumers re-check, see the queue is empty and the flag is set, and exit cleanly. Avoids the background-thread approach in `Program.cs` where consumers are killed by process exit.
+
+### Build & Run
+
+All `.cs` files share the same class name, so compile `Program.Final.cs` in isolation:
+
+```bash
+csc Program.Final.cs -out:Final.exe && mono Final.exe   # macOS / Linux
+csc Program.Final.cs -out:Final.exe && .\Final.exe      # Windows
+```
+
+Or with a `.csproj`, add `<Compile Remove="Program.cs" ... />` to exclude the others.
+
+### Expected output
+
+```
+...........[Thread-100]:Queue full, waiting...........
+...........[Thread-200]:Queue full, waiting...........
+j=1, thread:3
+j=100, thread:1
+...
+j=50, thread:2
+j=150, thread:1
+Press any key to exit...
+Thread-2 exited
+Thread-3 exited
+Thread-1 exited
+```
+
+101 `j=` lines, no duplicates, FIFO within each producer's stream. Termination order varies by schedule.
 
 ---
 
