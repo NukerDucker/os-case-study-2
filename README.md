@@ -151,15 +151,15 @@ Four team solutions scored against correctness and C# best-practice criteria.
 | No hardcoded sizes / counts | ❌ | ✅ `.Length` | ❌ | ⚠️ 34/34/33 | ✅ `const BufferCapacity` |
 | Thread termination tracking | ❌ | ❌ | ❌ | ✅ | ✅ |
 
-### Key defects per variant
+### Notes per variant
 
 **Baseline** — no locking → data races on `Front`/`Back`/`Count`; consumers never block → 109–111 duplicate reads per run.
 
-**Nuker** — correctest individual solution. Gap: background-thread kill to terminate consumers is less idiomatic than `Join`; consumers rely on the process exiting rather than self-terminating.
+**Napaul** — pros: `readonly` lock, `while`+`PulseAll`, print inside lock (correct FIFO transcript). Con: consumers are background threads killed at process exit rather than `Join`'d — relies on the drain loop in Main holding things together.
 
-**Tony** — `Monitor.Pulse` not `PulseAll`: one shared wait-set means Pulse may wake a producer when the queue is full, consuming the wakeup while the real consumer stays blocked → deadlock. `Console.WriteLine` outside the lock: printed order doesn't match FIFO dequeue order.
+**Tony** — pros: `producersFinished` flag + `PulseAll` on exit + `Join` all consumers (cleanest shutdown). Cons: `Monitor.Pulse` not `PulseAll` (wrong-role wakeup risk); print outside the lock (transcript order not guaranteed to match dequeue order).
 
-**Yu** — consumer loop hardcodes 34/34/33 items per thread (brittle; breaks if producer ranges change). Print outside lock. Non-`readonly` lock field.
+**Yu** — pros: `Join` all consumers, thread termination tracking. Cons: consumer loop hardcodes 34/34/33 items (breaks if producer ranges change); print outside lock; non-`readonly` lock field.
 
 ---
 
